@@ -1,15 +1,458 @@
 <!DOCTYPE html>
-<html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en-us">
+    <head>
+        <title>WebGL Notes</title>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+        <link rel="stylesheet" type="text/css" href="css/style.css"/>
+        <script src="js/sylvester.js"></script>
+        <script src="js/glUtils.js"></script>
+        <script>
+var canvas;
+var gl;
+var squareVerticesBuffer;
+var squareVerticesColorBuffer;
+var mvMatrix;
+var shaderProgram;
+var vertexPositionAttribute;
+var vertexColorAttribute;
+var perspectiveMatrix;
 
-  <head>
-    <meta charset='utf-8' />
-    <meta http-equiv="X-UA-Compatible" content="chrome=1" />
-    <meta name="description" content="Webgl-sandbox : Just a sandbox for playing around with WebGL" />
+//
+// start
+//
+// Called when the canvas is created to get the ball rolling.
+// Figuratively, that is. There's nothing moving in this demo.
+//
+function start() {
+    canvas = document.getElementById("glcanvas");
 
-    <title>WebGL Sandbox</title>
-  </head>
+    initWebGL(canvas);      // Initialize the GL context
 
-  <body>
-  Hello world
-  </body>
+    // Only continue if WebGL is available and working
+
+    if (gl) {
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);  // Clear to black, fully opaque
+        gl.clearDepth(1.0);                 // Clear everything
+        gl.enable(gl.DEPTH_TEST);           // Enable depth testing
+        gl.depthFunc(gl.LEQUAL);            // Near things obscure far things
+
+        // Initialize the shaders; this is where all the lighting for the
+        // vertices and so forth is established.
+
+        initShaders();
+
+        // Here's where we call the routine that builds all the objects
+        // we'll be drawing.
+
+        initBuffers();
+
+        // Set up to draw the scene periodically.
+
+        setInterval(updateSquare, 15);
+        drawScene();
+    }
+}
+
+//
+// initWebGL
+//
+// Initialize WebGL, returning the GL context or null if
+// WebGL isn't available or could not be initialized.
+//
+function initWebGL() {
+    gl = null;
+
+    try {
+        gl = canvas.getContext("experimental-webgl");
+    }
+    catch (e) {
+    }
+
+    // If we don't have a GL context, give up now
+
+    if (!gl) {
+        alert("Unable to initialize WebGL. Your browser may not support it.");
+    }
+}
+
+//
+// initBuffers
+//
+// Initialize the buffers we'll need. For this demo, we just have
+// one object -- a simple two-dimensional square.
+//
+function initBuffers() {
+
+    // Create a buffer for the square's vertices.
+
+    squareVerticesBuffer = gl.createBuffer();
+
+    // Select the squareVerticesBuffer as the one to apply vertex
+    // operations to from here out.
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, squareVerticesBuffer);
+
+    // Now create an array of vertices for the square. Note that the Z
+    // coordinate is always 0 here.
+
+    var vertices = [
+        1.0, 1.0, 0.0,
+        -1.0, 1.0, 0.0,
+        1.0, -1.0, 0.0,
+        -1.0, -1.0, 0.0
+    ];
+
+    // Now pass the list of vertices into WebGL to build the shape. We
+    // do this by creating a Float32Array from the JavaScript array,
+    // then use it to fill the current vertex buffer.
+
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+    // Now set up the colors for the vertices
+
+    var colors = [
+        1.0, 1.0, 1.0, 1.0,    // white
+        1.0, 0.0, 0.0, 1.0,    // red
+        0.0, 1.0, 0.0, 1.0,    // green
+        0.0, 0.0, 1.0, 1.0     // blue
+    ];
+
+    squareVerticesColorBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, squareVerticesColorBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.STATIC_DRAW);
+}
+
+//
+// drawScene
+//
+// Draw the scene.
+//
+function drawScene() {
+    // Clear the canvas before we start drawing on it.
+
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    // Establish the perspective with which we want to view the
+    // scene. Our field of view is 45 degrees, with a width/height
+    // ratio of 640:480, and we only want to see objects between 0.1 units
+    // and 100 units away from the camera.
+
+    perspectiveMatrix = makePerspective(45, 640.0 / 480.0, 0.1, 100.0);
+
+    // Set the drawing position to the "identity" point, which is
+    // the center of the scene.
+
+    loadIdentity();
+
+    // Now move the drawing position a bit to where we want to start
+    // drawing the square.
+
+    mvTranslate([-0.0, 0.0, -6.0]);
+
+    // Draw the square by binding the array buffer to the square's vertices
+    // array, setting attributes, and pushing it to GL.
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, squareVerticesBuffer);
+    gl.vertexAttribPointer(vertexPositionAttribute, 3, gl.FLOAT, false, 0, 0);
+
+    // Set the colors attribute for the vertices.
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, squareVerticesColorBuffer);
+    gl.vertexAttribPointer(vertexColorAttribute, 4, gl.FLOAT, false, 0, 0);
+
+    // Draw the square.
+
+    setMatrixUniforms();
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+//
+// initShaders
+//
+// Initialize the shaders, so WebGL knows how to light our scene.
+//
+function initShaders() {
+    var fragmentShader = getShader(gl, "shader-fs");
+    var vertexShader = getShader(gl, "shader-vs");
+
+    // Create the shader program
+
+    shaderProgram = gl.createProgram();
+    gl.attachShader(shaderProgram, vertexShader);
+    gl.attachShader(shaderProgram, fragmentShader);
+    gl.linkProgram(shaderProgram);
+
+    // If creating the shader program failed, alert
+
+    if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+        alert("Unable to initialize the shader program.");
+    }
+
+    gl.useProgram(shaderProgram);
+
+    vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+    gl.enableVertexAttribArray(vertexPositionAttribute);
+
+    vertexColorAttribute = gl.getAttribLocation(shaderProgram, "aVertexColor");
+    gl.enableVertexAttribArray(vertexColorAttribute);
+}
+
+//
+// getShader
+//
+// Loads a shader program by scouring the current document,
+// looking for a script with the specified ID.
+//
+function getShader(gl, id) {
+    var shaderScript = document.getElementById(id);
+
+    // Didn't find an element with the specified ID; abort.
+
+    if (!shaderScript) {
+        return null;
+    }
+
+    // Walk through the source element's children, building the
+    // shader source string.
+
+    var theSource = "";
+    var currentChild = shaderScript.firstChild;
+
+    while (currentChild) {
+        if (currentChild.nodeType == 3) {
+            theSource += currentChild.textContent;
+        }
+
+        currentChild = currentChild.nextSibling;
+    }
+
+    // Now figure out what type of shader script we have,
+    // based on its MIME type.
+
+    var shader;
+
+    if (shaderScript.type == "x-shader/x-fragment") {
+        shader = gl.createShader(gl.FRAGMENT_SHADER);
+    } else if (shaderScript.type == "x-shader/x-vertex") {
+        shader = gl.createShader(gl.VERTEX_SHADER);
+    } else {
+        return null;  // Unknown shader type
+    }
+
+    // Send the source to the shader object
+
+    gl.shaderSource(shader, theSource);
+
+    // Compile the shader program
+
+    gl.compileShader(shader);
+
+    // See if it compiled successfully
+
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        alert("An error occurred compiling the shaders: " + gl.getShaderInfoLog(shader));
+        return null;
+    }
+
+    return shader;
+}
+
+//
+// Matrix utility functions
+//
+
+function loadIdentity() {
+    mvMatrix = Matrix.I(4);
+}
+
+function multMatrix(m) {
+    mvMatrix = mvMatrix.x(m);
+}
+
+function mvTranslate(v) {
+    multMatrix(Matrix.Translation($V([v[0], v[1], v[2]])).ensure4x4());
+}
+
+function setMatrixUniforms() {
+    var pUniform = gl.getUniformLocation(shaderProgram, "uPMatrix");
+    gl.uniformMatrix4fv(pUniform, false, new Float32Array(perspectiveMatrix.flatten()));
+
+    var mvUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+    gl.uniformMatrix4fv(mvUniform, false, new Float32Array(mvMatrix.flatten()));
+}
+
+
+// new code to do randomized animation
+var incRot = null;
+var squareVerts = $M([
+    [1.0, 1.0, 0.0],
+    [-1.0, 1.0, 0.0],
+    [1.0, -1.0, 0.0],
+    [-1.0, -1.0, 0.0]
+]);
+var updateCount = 0;
+var animate = false;
+function updateSquare() {
+    if(!animate) {
+        return;
+    }
+
+    // Create a buffer for the square's vertices.
+
+    squareVerticesBuffer = gl.createBuffer();
+
+    // Select the squareVerticesBuffer as the one to apply vertex
+    // operations to from here out.
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, squareVerticesBuffer);
+
+    // Now create an array of vertices for the square. Note that the Z
+    // coordinate is always 0 here.
+    if(updateCount % 100 == 0) {
+        incRot = Matrix.Rotation(
+            2 * Math.PI * 0.02 * (Math.random() - 0.5),
+            Vector.create([Math.random(), Math.random(), Math.random()]));
+    }
+
+    squareVerts = incRot.multiply(squareVerts.transpose()).transpose();
+    var vertices = [];
+    for(var c = 0; c < squareVerts.elements.length; c++) {
+        vertices = vertices.concat(squareVerts.elements[c]);
+    }
+
+    // Now pass the list of vertices into WebGL to build the shape. We
+    // do this by creating a Float32Array from the JavaScript array,
+    // then use it to fill the current vertex buffer.
+
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+    if(updateCount % 100 == 0) {
+        // Now set up the colors for the vertices
+
+        var colors = [];
+        for(var i = 0; i < 16; i++) {
+            colors.push(Math.random());
+        }
+
+        squareVerticesColorBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, squareVerticesColorBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.STATIC_DRAW);
+    }
+    drawScene();
+
+    updateCount++;
+}
+        </script>
+        <script id="shader-fs" type="x-shader/x-fragment">
+varying lowp vec4 vColor;
+void main(void) {
+    gl_FragColor = vColor;
+}
+        </script>
+        <script id="shader-vs" type="x-shader/x-vertex">
+attribute vec3 aVertexPosition;
+attribute vec4 aVertexColor;
+
+uniform mat4 uMVMatrix;
+uniform mat4 uPMatrix;
+
+varying lowp vec4 vColor;
+
+void main(void) {
+    gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+    vColor = aVertexColor;
+}
+        </script>
+    </head>
+    <body onload="start()">
+        <h1>WebGL Notes</h1>
+
+        This page just contains some notes that I gathered on WebGL.
+
+        <h2>What is WebGL</h2>
+
+        <ul>
+            <li>standardized 3D graphics API for the web based on the OpenGL API (if you've done work in OpenGL much of WebGL will be familliar)</li>
+            <li>takes advantage of 3D hardware acceleration</li>
+            <li>renders to &lt;canvas&gt; element</li>
+            <li>
+                not yet universally supported (based on <a href="http://caniuse.com/webgl">http://caniuse.com/webgl</a> and <a href="http://en.wikipedia.org/wiki/WebGL">http://en.wikipedia.org/wiki/WebGL</a>)
+                <ul>
+                    <li>supported: recent versions of chrome, firefox and opera</li>
+                    <li>partially supported: IE11 (fails most conformance tests), safari has support but it is off by default</li>
+                </ul>
+            </li>
+        </ul>
+
+        <h2>Examples</h2>
+
+        <p>
+            Hello world WebGL (modified code from Mozilla's tutorial):<br><br>
+            <canvas id="glcanvas" width="400" height="300" onclick="animate = !animate;">
+                Your browser doesn't appear to support the HTML5 <code>&lt;canvas&gt;</code> element.
+            </canvas>
+        </p>
+
+        <p>
+            <a href="http://lessons.goxtk.com/17/">Reslicing Demo</a>: a nice example of slicing and manipulating 3D
+            medical imagery
+        </p>
+
+        <p>
+            <a href="http://www.gootechnologies.com/pearl-boy/">Perl Boy demo</a>: one of the most visually impressive
+            demos showing what is possible with WebGL
+        <p/>
+
+        <h2>My Take-Aways</h2>
+
+        <p>
+            WebGL, like OpenGL, is a very low-level rendering API that requires working with shaders, transformation matrices
+            and other primitives from linear algebra. If you're starting a new project you should consider using
+            a library layered on top of WebGL like <a href="http://threejs.org/">three.j</a> (MIT license),
+            <a href="http://www.gootechnologies.com/products/engine/">Goo Engine</a> (commercial license) or
+            <a href="https://github.com/BabylonJS/Babylon.js/">Babylon.js</a> (Apache License).
+        </p>
+
+        <p>
+            I would use WebGL for a project where:
+
+            <ul>
+                <li>3D visualization is a requirement (canvas or SVG have wider and more consistent support)</li>
+                <li>it's acceptable to require that users will use a recent version of FF, IE or Chrome</li>
+                <li>
+                    the web platform is a good choice
+                    <ul>
+                        <li>Does the application require too much data to allow the user to dynamically load it via web server?</li>
+                        <li>Is the application too computationally intense to run in javascript</li>
+                    </ul>
+                </li>
+            </ul>
+        <p/>
+
+        <p>
+            Alternative approaches for developing 3D applications:
+
+            <ul>
+                <li>
+                    Develop a 3D desktop application using OpenGL or Direct3D
+                    <ul>
+                        <li>Pro: you can accelerate algorithms by using C and multi-threading</li>
+                        <li>Pro: you do not have to serve up data every time the application starts</li>
+                        <li>Con: requiring a user to install a desktop 3D application will probably be a bigger pain point for more users than requiring a browser that supports WebGL</li>
+                    </ul>
+                </li>
+                <li>
+                    Develop using Java/Flash plugins: in addition to requiring users that don't already have them to install these plugins
+                    they can introduce new security holes
+                </li>
+            </ul>
+        </p>
+
+        <h2>Resources</h2>
+
+        <ul>
+            <li><a href="https://developer.mozilla.org/en-US/docs/Web/WebGL">Mozilla WebGL Tutorials and Resources</a></li>
+            <li><a href="http://www.chromeexperiments.com/webgl/">WebGL Experiments</a>: many examples showing the kinds of applications that can be developed with WebGL</li>
+        </ul>
+    </body>
 </html>
